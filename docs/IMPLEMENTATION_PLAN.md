@@ -218,13 +218,14 @@ exceedance, `flags.event=1`). Ground node validates `magic`/`version`/`crc16`, t
 
 ## 6. Ground station (separate repository)
 
-The ground station lives in [`aqm-ground-station`](https://github.com/ukemeikot/aqm-ground-station), not in this repo. Summary:
+The ground station lives in [`aqm-ground-station`](https://github.com/ukemeikot/aqm-ground-station), not in this repo. It
+is a **webapp with a history database plus a minimal LoRa→USB receiver dongle** — there is no custom "ground unit"
+(Decision D5). Summary:
 
-- **`ground-node` firmware:** LoRa RX → CRC check → decode → emit one NDJSON object per line to USB serial. No SD, no
-  sensors. Reuses this repo's LoRa driver and the shared `aqm_protocol` codec.
-- **Laptop dashboard (Decision D5):** **Python + Streamlit** (chosen over Node-RED for version control, cross-platform
-  operation, and easy time-series + map plotting). Reads the USB serial NDJSON, plots gas/PM/CO₂ vs. time, maps the GPS
-  track, and raises visible alerts on `flags.event`.
+- **Receiver dongle:** ESP32 + RAK3172 that receives P2P, validates CRC (shared `aqm_protocol` codec), decodes, and emits
+  one NDJSON object per packet over USB. No SD, no sensors, no display — it only owns the radio.
+- **Webapp:** Python (FastAPI) + SQLite + browser dashboard. Ingests the serial stream, **persists every reading**, and
+  serves live + historical dashboards (Chart.js time-series, Leaflet map, event alert banner) with CSV export.
 
 Full ground-station design is in that repo's `docs/GROUND_STATION.md`.
 
@@ -291,7 +292,7 @@ contradicts it, but the default we code to is fixed here.
 | **D2** | **MCUs / camera:** both nodes are **ESP32-WROOM-32**. The camera is a **dedicated ESP32-CAM co-processor**, triggered by the main node on GPIO4; it captures the JPEG itself and returns the filename over a 1-wire serial line. | Keeps camera DMA/PSRAM traffic off the acquisition MCU so imaging never steals cycles from the sensor loop or SD writes. | If a single-MCU OV2640 path is required, revisit §4.8 pinout and PSRAM budget. |
 | **D3** | **LoRa PHY:** **868 MHz** (Nigeria/NCC), **P2P** first. Start point **SF9 / BW125 kHz / CR 4/5 / 14 dBm**, preamble 8, explicit header, CRC on. | Balances range vs. airtime for the ~41-byte payload; SF is the tuning knob during range tests (SF7 = shorter/faster, SF10–11 = max range). Defer full LoRaWAN + gateway (PDF 2.5). | Range-test results — raise SF for reach, lower for airtime/power. |
 | **D4** | **SD format:** **binary packed records on-card** (protocol layout + full-resolution local fields), plus a host-side converter in `tools/` that exports CSV. | Fastest writes, least card wear, smallest files for long flights; human-readable CSV generated offline, not on the MCU. | — |
-| **D5** | **Dashboard:** **Python + Streamlit** (not Node-RED). | Version-controlled, cross-platform, easy time-series + GPS map + alerts; team already uses Python. | — |
+| **D5** | **Ground station = webapp + minimal receiver dongle** (not a second custom ground unit): Python (FastAPI) + SQLite history + browser dashboard, fed by an ESP32+RAK3172 LoRa→USB bridge. | Moves all storage/history/UI off-device into a browser-accessible app with persistent records; the unavoidable LoRa radio shrinks to a dumb dongle. | Need on-device autonomy → reconsider a standalone unit. |
 | **D6** | **Repos:** `esp32-project` = **drone firmware only**; `aqm-ground-station` = **ground-node firmware + Streamlit dashboard**. Shared LoRa contract = `lib/aqm_protocol/aqm_protocol.h` here (source of truth), vendored byte-identically into the ground repo. | Clean separation of two deployable units; single canonical packet definition prevents node drift. | Vendored copies drift → promote `aqm_protocol` to a git-submodule / PlatformIO git `lib_deps` library consumed by both. |
 | **D7** | **Node→dashboard contract:** one **NDJSON** object per received packet @ 115200 baud = decoded payload + `rssi`, `snr`, `recv_epoch`. | Line-delimited JSON is trivial to parse, stream, and log; link metadata added by the ground node. | — |
 | **D8** | **Cadence:** sample every **3 s**; transmit every N-th sample (default **N=1** on the bench, raise for airtime/power) + immediate alert on threshold event. | Matches the 2–5 s design window; N is the airtime/power lever once range is characterised. | — |
