@@ -209,7 +209,7 @@ byte-identically into the ground repo (Decision D6) — and is the primary CRC/p
 | `vbat` | u16 | mV | 2 |
 | `flags` | u8 | fix, event, warmup, faults | 1 |
 | `crc16` | u16 | over all prior bytes | 2 |
-| **Total** | | | **~41 B** |
+| **Total** | | | **39 B** |
 
 Two packet types share this layout: **periodic** (every N-th sample) and **event/alert** (sent immediately on threshold
 exceedance, `flags.event=1`). Ground node validates `magic`/`version`/`crc16`, then emits one JSON line per packet over USB.
