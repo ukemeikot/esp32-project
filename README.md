@@ -1,8 +1,11 @@
 # Drone-Based Air Quality Monitoring System — ESP32 Firmware
 
-Firmware for a drone-mounted air quality monitoring payload and its ground station, using **LoRa / LoRaWAN**
-telemetry. Two `ESP32-WROOM-32` nodes (drone + ground) acquire, log, and relay environmental data (gas, particulate
-matter, CO₂), geotagged via GPS, with event-triggered imaging.
+Firmware for the drone-mounted air quality monitoring **payload**, using **LoRa / LoRaWAN** telemetry. An
+`ESP32-WROOM-32` node acquires, logs, and relays environmental data (gas, particulate matter, CO₂), geotagged via GPS,
+with event-triggered imaging.
+
+> The **ground station** (receiver firmware + laptop dashboard) is a separate deployable and lives in its own repo:
+> **[aqm-ground-station](https://github.com/ukemeikot/aqm-ground-station)**.
 
 Built with [PlatformIO](https://platformio.org/) on the Arduino-ESP32 framework.
 
@@ -11,10 +14,10 @@ Built with [PlatformIO](https://platformio.org/) on the Arduino-ESP32 framework.
 
 ## Overview
 
-| Node | Role |
-|---|---|
-| **Drone node** | Samples all sensors, geotags with GPS, logs to SD, transmits over LoRa, triggers the camera on threshold events. |
-| **Ground node** | Receives LoRa packets, validates them, and streams decoded JSON to a laptop dashboard over USB serial. |
+| Node | Repo | Role |
+|---|---|---|
+| **Drone node** | this repo | Samples all sensors, geotags with GPS, logs to SD, transmits over LoRa, triggers the camera on threshold events. |
+| **Ground node** | [aqm-ground-station](https://github.com/ukemeikot/aqm-ground-station) | Receives LoRa packets, validates them, and streams decoded NDJSON to a Streamlit dashboard over USB serial. |
 
 ### Sensors & peripherals
 
@@ -44,18 +47,15 @@ esp32-project/
 Requires [PlatformIO Core](https://docs.platformio.org/en/latest/core/installation/).
 
 ```bash
-# Build
-pio run -e drone         # drone-node firmware
-pio run -e ground        # ground-node firmware
+# Build drone-node firmware
+pio run
 
 # Flash + serial monitor
-pio run -e drone -t upload -t monitor
+pio run -t upload -t monitor
 
 # Run unit tests
 pio test -e native
 ```
-
-> The `drone` / `ground` build environments are defined in `platformio.ini` once firmware work begins.
 
 ## Documentation
 

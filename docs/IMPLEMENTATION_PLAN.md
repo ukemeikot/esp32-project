@@ -23,6 +23,7 @@ esp32-project/
 ├─ platformio.ini      # build config (compiled settings)
 ├─ src/                # <-- ONLY this is compiled into the .bin
 ├─ lib/                # <-- and private libraries here
+│  └─ aqm_protocol/    # shared LoRa packet contract (source of truth, §5/D6)
 ├─ include/            # headers
 ├─ test/              # unit tests (host/target, not in the shipped image)
 └─ docs/               # <-- THIS PLAN. Documentation only. Never flashed.
@@ -73,13 +74,17 @@ interrupts during frame reception, which will jitter the sensor loop. Recommende
 
 ## 2. Firmware architecture
 
-Two firmware images share ~80% of their code through `lib/`:
+**Repository split (Decision D6).** This repository holds **only the drone payload firmware**. The ground station —
+ground-node ESP32 firmware plus the laptop dashboard — lives in its own repository,
+[`aqm-ground-station`](https://github.com/ukemeikot/aqm-ground-station), because it is a separate deployable unit with a
+different tech mix (embedded C++ receiver + Python dashboard) and a different owner (the operator, not the airframe).
 
-- **`drone-node`** — acquires all sensors, geotags, logs to SD, transmits over LoRa, handles event triggers + camera.
-- **`ground-node`** — receives LoRa packets, validates CRC, and streams decoded JSON over USB serial to the laptop dashboard.
+- **This repo — `drone-node`:** acquires all sensors, geotags, logs to SD, transmits over LoRa, handles event triggers + camera.
+- **Ground repo — `ground-node` + dashboard:** receives LoRa packets, validates CRC, and streams decoded NDJSON over USB
+  serial to a Streamlit dashboard.
 
-We build both from one repository using PlatformIO **build environments** (`[env:drone]`, `[env:ground]`) selected by a
-compile-time flag, so shared drivers are compiled once and never diverge.
+The two nodes share one thing that must never diverge: the LoRa packet format. That contract is defined once here in
+`lib/aqm_protocol/aqm_protocol.h` (the source of truth) and vendored byte-identically into the ground repo (see §5).
 
 ### 2.1 Concurrency model (FreeRTOS, dual-core)
 
@@ -188,7 +193,8 @@ header per unit and are set during the ADC/analog-front-end bench test (PDF test
 ## 5. LoRa payload definition (PDF 2.3 — compact binary, < 50 bytes)
 
 A packed, fixed-layout struct. Little-endian, no padding (`__attribute__((packed))`), integer-scaled fields. This is the
-contract shared by both nodes (lives in `lib/codec/`), and is the primary CRC/pack hotspot.
+contract shared by both nodes — the **source of truth** is `lib/aqm_protocol/aqm_protocol.h` in this repo, vendored
+byte-identically into the ground repo (Decision D6) — and is the primary CRC/pack hotspot.
 
 | Field | Type | Scale / unit | Bytes |
 |---|---|---|---|
@@ -210,13 +216,17 @@ exceedance, `flags.event=1`). Ground node validates `magic`/`version`/`crc16`, t
 
 ---
 
-## 6. Ground station firmware + laptop dashboard
+## 6. Ground station (separate repository)
 
-- **`ground-node` firmware:** LoRa RX → CRC check → decode → print one compact JSON object per line to USB serial. No SD, no
-  sensors. Minimal, so we can reuse the same LoRa driver and codec.
-- **Laptop dashboard:** a small Python (Streamlit) or Node-RED reader of the USB serial JSON stream (PDF 2.4). Lives in a
-  separate `groundstation/` folder or its own repo — **not** ESP32 firmware, so not in this PlatformIO build. Plots gas/PM/CO₂
-  vs. time and maps GPS track; raises visible alerts on `flags.event`.
+The ground station lives in [`aqm-ground-station`](https://github.com/ukemeikot/aqm-ground-station), not in this repo. Summary:
+
+- **`ground-node` firmware:** LoRa RX → CRC check → decode → emit one NDJSON object per line to USB serial. No SD, no
+  sensors. Reuses this repo's LoRa driver and the shared `aqm_protocol` codec.
+- **Laptop dashboard (Decision D5):** **Python + Streamlit** (chosen over Node-RED for version control, cross-platform
+  operation, and easy time-series + map plotting). Reads the USB serial NDJSON, plots gas/PM/CO₂ vs. time, maps the GPS
+  track, and raises visible alerts on `flags.event`.
+
+Full ground-station design is in that repo's `docs/GROUND_STATION.md`.
 
 ---
 
@@ -251,33 +261,41 @@ This firmware repo delivers M1–M4 independently of the drone build.
 Recommended `platformio.ini` (to be applied when firmware work starts — not yet committed):
 
 ```ini
-[env]
+[env:drone]
 platform = espressif32
 board = esp32dev
 framework = arduino
 monitor_speed = 115200
-build_flags = -O2 -Wall -Wextra
+build_flags = -O2 -Wall -Wextra -DNODE_DRONE
 build_unflags = -Os
-
-[env:drone]
-build_flags = ${env.build_flags} -DNODE_DRONE
-
-[env:ground]
-build_flags = ${env.build_flags} -DNODE_GROUND
 ```
 
-- Build a node: `pio run -e drone` / `pio run -e ground`
-- Flash + monitor: `pio run -e drone -t upload -t monitor`
+(The ground-node build lives in the separate `aqm-ground-station` repo, `firmware/platformio.ini`.)
+
+- Build: `pio run` (or `pio run -e drone`)
+- Flash + monitor: `pio run -t upload -t monitor`
 - Unit tests: `pio test -e native` (host-side codec/CRC/fixed-point tests) and on-target where hardware is needed.
 
 Documentation (this file, `docs/`) is untouched by every one of these commands — it cannot enter the firmware image.
 
 ---
 
-## 10. Open decisions to confirm before coding
+## 10. Decision log (resolved — these are the recommendations we build against)
 
-1. **UART topology (§1.1):** confirm MH-Z19C-PWM + SC16IS752 bridge, or fall back to one SoftwareSerial. *Blocks wiring & M1.*
-2. **ESP32 variant:** plan assumes classic ESP32-WROOM-32. If the camera is an **ESP32-CAM**, its pin map and PSRAM change §4.8.
-3. **Region/frequency:** 868 MHz assumed for Nigeria (NCC) — confirm the exact P2P frequency/SF/BW plan.
-4. **SD record format:** binary (compact, fast) vs. CSV (human-readable). Recommend binary on-card + a converter tool.
-5. **Deliverable format:** this plan is Markdown in `docs/`. Say the word if you also want it exported to `.docx`/PDF.
+These were the open items; they are now **decided** so implementation can start. Each is reversible if bench evidence
+contradicts it, but the default we code to is fixed here.
+
+| ID | Decision | Rationale | Reversible if… |
+|---|---|---|---|
+| **D1** | **UART topology:** MH-Z19C in **PWM mode** (edge-capture via RMT/PCNT, `IRAM_ATTR` ISR) + **SC16IS752 I²C↔dual-UART bridge** for PMS5003. Hardware UARTs: UART0=debug, UART1=GPS, UART2=RAK3172. | Solves the 4-devices/2-UARTs shortage without bit-banged `SoftwareSerial`, which would jitter the sample loop. Fully hardware-buffered → CPU stays free (performance requirement). | Bridge unavailable → fall back to one `EspSoftwareSerial` for PMS5003 only, pinned off the acquisition core (§1.1 option 3). |
+| **D2** | **MCUs / camera:** both nodes are **ESP32-WROOM-32**. The camera is a **dedicated ESP32-CAM co-processor**, triggered by the main node on GPIO4; it captures the JPEG itself and returns the filename over a 1-wire serial line. | Keeps camera DMA/PSRAM traffic off the acquisition MCU so imaging never steals cycles from the sensor loop or SD writes. | If a single-MCU OV2640 path is required, revisit §4.8 pinout and PSRAM budget. |
+| **D3** | **LoRa PHY:** **868 MHz** (Nigeria/NCC), **P2P** first. Start point **SF9 / BW125 kHz / CR 4/5 / 14 dBm**, preamble 8, explicit header, CRC on. | Balances range vs. airtime for the ~41-byte payload; SF is the tuning knob during range tests (SF7 = shorter/faster, SF10–11 = max range). Defer full LoRaWAN + gateway (PDF 2.5). | Range-test results — raise SF for reach, lower for airtime/power. |
+| **D4** | **SD format:** **binary packed records on-card** (protocol layout + full-resolution local fields), plus a host-side converter in `tools/` that exports CSV. | Fastest writes, least card wear, smallest files for long flights; human-readable CSV generated offline, not on the MCU. | — |
+| **D5** | **Dashboard:** **Python + Streamlit** (not Node-RED). | Version-controlled, cross-platform, easy time-series + GPS map + alerts; team already uses Python. | — |
+| **D6** | **Repos:** `esp32-project` = **drone firmware only**; `aqm-ground-station` = **ground-node firmware + Streamlit dashboard**. Shared LoRa contract = `lib/aqm_protocol/aqm_protocol.h` here (source of truth), vendored byte-identically into the ground repo. | Clean separation of two deployable units; single canonical packet definition prevents node drift. | Vendored copies drift → promote `aqm_protocol` to a git-submodule / PlatformIO git `lib_deps` library consumed by both. |
+| **D7** | **Node→dashboard contract:** one **NDJSON** object per received packet @ 115200 baud = decoded payload + `rssi`, `snr`, `recv_epoch`. | Line-delimited JSON is trivial to parse, stream, and log; link metadata added by the ground node. | — |
+| **D8** | **Cadence:** sample every **3 s**; transmit every N-th sample (default **N=1** on the bench, raise for airtime/power) + immediate alert on threshold event. | Matches the 2–5 s design window; N is the airtime/power lever once range is characterised. | — |
+| **D9** | **Deliverable format:** design docs stay **Markdown in `docs/`** (never compiled/flashed, §0). | Diff-able, reviewable in-repo. | Export to `.docx`/PDF on request. |
+
+> With D1–D9 fixed, the remaining prerequisite before firmware coding is purely physical: confirm the as-built wiring
+> matches D1/D2 and the analog `Rf`/PGA values (§4.1) so the `ads1115` scaling constants can be entered.
