@@ -61,6 +61,7 @@ pio test -e native
 
 - **[Implementation Plan](docs/IMPLEMENTATION_PLAN.md)** — firmware architecture, performance strategy, hardware
   interface map, phased milestones, and the LoRa payload format.
+- **[Wiring / Circuit Diagram](docs/WIRING.md)** — as-coded pin map and Mermaid wiring diagram (matches `config.h`).
 
 ## Status
 
